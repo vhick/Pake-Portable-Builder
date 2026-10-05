@@ -20,13 +20,37 @@ function Normalize-Newlines {
     return $Text.Replace("`r`n","`n").Replace("`r","`n")
 }
 
+function Show-Diagnostic {
+    param(
+        [string]$Text,
+        [string]$Needle,
+        [string]$Label
+    )
+
+    Write-Host ""
+    Write-Host "Patch diagnostic: $Label" -ForegroundColor Yellow
+
+    $start = $Text.IndexOf($Needle,[StringComparison]::Ordinal)
+
+    if ($start -ge 0) {
+        $from = [Math]::Max(0,$start - 500)
+        $length = [Math]::Min(3200,$Text.Length - $from)
+        Write-Host $Text.Substring($from,$length)
+    }
+    else {
+        Write-Host "Diagnostic needle '$Needle' was not found." -ForegroundColor Yellow
+    }
+
+    Write-Host ""
+}
+
 function Replace-OneRegex {
     param(
         [string]$Text,
         [string]$Pattern,
         [string]$Replacement,
         [string]$Label,
-        [string]$DiagnosticNeedle = ""
+        [string]$DiagnosticNeedle
     )
 
     $Text = Normalize-Newlines $Text
@@ -41,22 +65,12 @@ function Replace-OneRegex {
     $matches = $regex.Matches($Text)
 
     if ($matches.Count -ne 1) {
-        Write-Host ""
-        Write-Host "Patch diagnostic for: $Label" -ForegroundColor Yellow
-        Write-Host "Expected exactly one match; found $($matches.Count)." -ForegroundColor Yellow
+        Show-Diagnostic `
+            -Text $Text `
+            -Needle $DiagnosticNeedle `
+            -Label $Label
 
-        if ($DiagnosticNeedle) {
-            $start = $Text.IndexOf($DiagnosticNeedle,[StringComparison]::Ordinal)
-            if ($start -ge 0) {
-                $from = [Math]::Max(0,$start - 400)
-                $length = [Math]::Min(2400,$Text.Length - $from)
-                Write-Host ""
-                Write-Host "Current source near '$DiagnosticNeedle':" -ForegroundColor Yellow
-                Write-Host $Text.Substring($from,$length)
-            }
-        }
-
-        throw "Could not apply '$Label'. Upstream Pake may have changed. Failing closed instead of producing a possibly non-portable build."
+        throw "Could not apply '$Label'. Expected exactly one source match but found $($matches.Count). Upstream Pake may have changed."
     }
 
     Write-Host "Applying: $Label" -ForegroundColor Cyan
@@ -66,18 +80,22 @@ function Replace-OneRegex {
 # -------------------------------------------------------------------
 # 1. Pake's explicit WebView data directory
 # -------------------------------------------------------------------
+
 $util = Normalize-Newlines (Get-Content -LiteralPath $utilFile -Raw)
 
 if ($util.Contains('.join("Data")') -and $util.Contains('.join("WebView")')) {
     Write-Host "WebView path patch already present." -ForegroundColor DarkGray
 }
 else {
+    # Only verify broad semantic anchors. Do NOT require one exact formatted
+    # source line; GitHub/formatter/upstream whitespace can differ.
     foreach ($required in @(
         "pub fn get_data_dir",
         ".config_dir()",
         ".join(package_name)"
     )) {
         if ($util.IndexOf($required,[StringComparison]::Ordinal) -lt 0) {
+            Show-Diagnostic -Text $util -Needle "pub fn get_data_dir" -Label "WebView path precheck"
             throw "Pake get_data_dir changed upstream: missing '$required'."
         }
     }
@@ -141,24 +159,34 @@ pub fn get_data_dir(app: &AppHandle, package_name: String) -> std::io::Result<Pa
 Set-Content -LiteralPath $utilFile -Value $util -Encoding UTF8 -NoNewline
 
 # -------------------------------------------------------------------
-# 2. Tauri/plugin directories
+# 2. Tauri/plugin app directories
 #
-# v1.1 still used one exact line match in lib.rs. The new v1.2 patcher
-# matches the current run_app structure by syntax instead of indentation.
+# IMPORTANT v1.4 change:
+# The old script performed a strict precheck for the exact text:
+#
+#   .build(tauri::generate_context!())
+#
+# before running a whitespace-tolerant regex.
+#
+# That strict precheck was redundant and is what failed in the user's v1.3
+# run. We now rely on bounded syntax patterns directly.
 # -------------------------------------------------------------------
+
 $lib = Normalize-Newlines (Get-Content -LiteralPath $libFile -Raw)
 
-if ($lib.Contains("PAKE_TRUE_PORTABLE_V2")) {
+if ($lib.Contains("PAKE_TRUE_PORTABLE_V4")) {
     Write-Host "Portable Tauri context patch already present." -ForegroundColor DarkGray
 }
 else {
+    # Broad sanity checks only.
     foreach ($required in @(
         "pub fn run_app()",
         "get_pake_config()",
         "tauri::Builder::default()",
-        ".build(tauri::generate_context!())"
+        "tauri::generate_context!"
     )) {
         if ($lib.IndexOf($required,[StringComparison]::Ordinal) -lt 0) {
+            Show-Diagnostic -Text $lib -Needle "pub fn run_app()" -Label "Tauri context precheck"
             throw "Pake run_app changed upstream: missing '$required'."
         }
     }
@@ -166,7 +194,7 @@ else {
     $newConfigBlock = @'
     let (pake_config, tauri_config) = get_pake_config();
 
-    // PAKE_TRUE_PORTABLE_V2
+    // PAKE_TRUE_PORTABLE_V4
     // Tauri/plugin app_* paths follow this root. Pake's explicit WebView
     // data directory is redirected separately in util.rs.
     let mut portable_context = tauri::generate_context!();
@@ -179,21 +207,23 @@ else {
     }
 '@
 
-    $configPattern = '(?m)^[ \t]*let\s*\(\s*pake_config\s*,\s*tauri_config\s*\)\s*=\s*get_pake_config\s*\(\s*\)\s*;\s*$'
+    # Match only the get_pake_config assignment. Formatting/indentation may vary.
+    $configPattern = '(?s)let\s*\(\s*pake_config\s*,\s*tauri_config\s*\)\s*=\s*get_pake_config\s*\(\s*\)\s*;'
 
     $lib = Replace-OneRegex `
         -Text $lib `
         -Pattern $configPattern `
-        -Replacement (Normalize-Newlines $newConfigBlock) `
+        -Replacement (Normalize-Newlines $newConfigBlock).TrimEnd() `
         -Label "create portable Tauri context" `
         -DiagnosticNeedle "get_pake_config"
 
-    $buildPattern = '(?m)^[ \t]*\.build\s*\(\s*tauri::generate_context!\s*\(\s*\)\s*\)\s*$'
+    # Match the builder call regardless of whitespace/newlines.
+    $buildPattern = '(?s)\.build\s*\(\s*tauri::generate_context!\s*\(\s*\)\s*\)'
 
     $lib = Replace-OneRegex `
         -Text $lib `
         -Pattern $buildPattern `
-        -Replacement '        .build(portable_context)' `
+        -Replacement '.build(portable_context)' `
         -Label "build with portable Tauri context" `
         -DiagnosticNeedle ".build("
 }
@@ -204,13 +234,13 @@ $revision = (git -C $SourceRoot rev-parse HEAD).Trim()
 
 [ordered]@{
     patch = "Pake Windows true-portable"
-    patch_version = "1.2"
+    patch_version = "1.4"
     upstream_revision = $revision
     applied_at = (Get-Date).ToString("o")
     tauri_app_root = "./Data/App"
     webview_root = "./Data/WebView/<productName>"
     downloads = "normal Windows Downloads directory"
-    matching = "CRLF/LF-safe bounded regex"
+    matching = "semantic prechecks + bounded whitespace-tolerant regex"
 } |
     ConvertTo-Json -Depth 6 |
     Set-Content -LiteralPath (Join-Path $SourceRoot ".pake-true-portable-patch.json") -Encoding UTF8
