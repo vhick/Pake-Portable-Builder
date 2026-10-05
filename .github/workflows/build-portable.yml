@@ -1,0 +1,245 @@
+name: Build Pake Portable
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: What should the builder do?
+        required: true
+        default: one-off
+        type: choice
+        options:
+          - one-off
+          - rebuild-saved
+          - inspect-source
+
+      upstream_repo:
+        description: Source repository (leave blank for YOUR-USERNAME/Pake)
+        required: false
+        default: ""
+
+      upstream_ref:
+        description: Source branch/tag/SHA
+        required: false
+        default: "main"
+
+      url:
+        description: Website URL (one-off mode)
+        required: false
+        default: "https://example.com"
+
+      app_name:
+        description: App name (one-off mode)
+        required: false
+        default: "Example"
+
+      icon:
+        description: Icon URL or path (optional)
+        required: false
+        default: ""
+
+      width:
+        description: Window width
+        required: false
+        default: "1200"
+
+      height:
+        description: Window height
+        required: false
+        default: "780"
+
+      show_system_tray:
+        description: Show system tray icon
+        required: false
+        type: boolean
+        default: true
+
+      hide_on_close:
+        description: Hide instead of exiting when window is closed
+        required: false
+        type: boolean
+        default: true
+
+      start_to_tray:
+        description: Start hidden in tray
+        required: false
+        type: boolean
+        default: false
+
+      incognito:
+        description: Incognito (does not keep website login/storage)
+        required: false
+        type: boolean
+        default: false
+
+      enable_find:
+        description: Enable Ctrl+F find
+        required: false
+        type: boolean
+        default: true
+
+      dark_mode:
+        description: Force dark mode
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pake-portable-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Pake Portable
+    runs-on: windows-2022
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout portable-builder repository
+        uses: actions/checkout@v7
+
+      - name: Resolve source repository
+        id: source
+        shell: pwsh
+        run: |
+          $repo = "${{ inputs.upstream_repo }}"
+          if ([string]::IsNullOrWhiteSpace($repo)) {
+            $repo = "${{ github.repository_owner }}/Pake"
+          }
+
+          $ref = "${{ inputs.upstream_ref }}"
+          if ([string]::IsNullOrWhiteSpace($ref)) {
+            $ref = "main"
+          }
+
+          "repo=$repo" >> $env:GITHUB_OUTPUT
+          "ref=$ref" >> $env:GITHUB_OUTPUT
+
+          Write-Host "Source repository: $repo"
+          Write-Host "Source ref:        $ref"
+
+      - name: Checkout synced Pake fork
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ steps.source.outputs.repo }}
+          ref: ${{ steps.source.outputs.ref }}
+          path: upstream
+          fetch-depth: 1
+
+      - name: Record source revision
+        id: revision
+        shell: pwsh
+        run: |
+          $rev = (git -C upstream rev-parse HEAD).Trim()
+          "sha=$rev" >> $env:GITHUB_OUTPUT
+          Write-Host "Source revision: $rev"
+
+      - name: Inspect current Pake source
+        if: ${{ inputs.mode == 'inspect-source' }}
+        shell: pwsh
+        run: |
+          & .\scripts\Inspect-Pake-Source.ps1 `
+            -SourceRoot "$PWD\upstream" `
+            -OutputRoot "$PWD\artifact\Pake-Inspection"
+
+      - name: Upload source inspection
+        if: ${{ inputs.mode == 'inspect-source' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: Pake-Portable-Source-Inspection-${{ steps.revision.outputs.sha }}
+          path: artifact/Pake-Inspection/**
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Install pnpm 10.26.2
+        if: ${{ inputs.mode != 'inspect-source' }}
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.26.2
+          run_install: false
+
+      - name: Setup Node 22
+        if: ${{ inputs.mode != 'inspect-source' }}
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: upstream/pnpm-lock.yaml
+
+      - name: Setup Rust
+        if: ${{ inputs.mode != 'inspect-source' }}
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        if: ${{ inputs.mode != 'inspect-source' }}
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: upstream/src-tauri
+
+      - name: Install Pake dependencies
+        if: ${{ inputs.mode != 'inspect-source' }}
+        working-directory: upstream
+        shell: pwsh
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Pake CLI
+        if: ${{ inputs.mode != 'inspect-source' }}
+        working-directory: upstream
+        shell: pwsh
+        run: pnpm run cli:build
+
+      - name: Apply true-portable source patch
+        if: ${{ inputs.mode != 'inspect-source' }}
+        shell: pwsh
+        run: |
+          & .\scripts\Apply-Pake-Portable-Patch.ps1 `
+            -SourceRoot "$PWD\upstream"
+
+      - name: Verify portable patch
+        if: ${{ inputs.mode != 'inspect-source' }}
+        shell: pwsh
+        run: |
+          & .\scripts\Verify-Pake-Portable-Source.ps1 `
+            -SourceRoot "$PWD\upstream"
+
+      - name: Build one-off portable app
+        if: ${{ inputs.mode == 'one-off' }}
+        shell: pwsh
+        run: |
+          & .\scripts\Build-One-PakeApp.ps1 `
+            -SourceRoot "$PWD\upstream" `
+            -KitRoot "$PWD" `
+            -OutputRoot "$PWD\artifact\Pake-Portable-Apps" `
+            -Url "${{ inputs.url }}" `
+            -Name "${{ inputs.app_name }}" `
+            -Icon "${{ inputs.icon }}" `
+            -Width ([int]"${{ inputs.width }}") `
+            -Height ([int]"${{ inputs.height }}") `
+            -ShowSystemTray ([System.Convert]::ToBoolean("${{ inputs.show_system_tray }}")) `
+            -HideOnClose ([System.Convert]::ToBoolean("${{ inputs.hide_on_close }}")) `
+            -StartToTray ([System.Convert]::ToBoolean("${{ inputs.start_to_tray }}")) `
+            -Incognito ([System.Convert]::ToBoolean("${{ inputs.incognito }}")) `
+            -EnableFind ([System.Convert]::ToBoolean("${{ inputs.enable_find }}")) `
+            -DarkMode ([System.Convert]::ToBoolean("${{ inputs.dark_mode }}"))
+
+      - name: Rebuild saved portable apps
+        if: ${{ inputs.mode == 'rebuild-saved' }}
+        shell: pwsh
+        run: |
+          & .\scripts\Build-Saved-PakeApps.ps1 `
+            -SourceRoot "$PWD\upstream" `
+            -KitRoot "$PWD" `
+            -AppsRoot "$PWD\apps" `
+            -OutputRoot "$PWD\artifact\Pake-Portable-Apps"
+
+      - name: Upload portable app(s)
+        if: ${{ inputs.mode != 'inspect-source' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: Pake-Portable-Windows-x64-${{ steps.revision.outputs.sha }}
+          path: artifact/Pake-Portable-Apps/**
+          if-no-files-found: error
+          retention-days: 30
