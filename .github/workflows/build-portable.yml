@@ -191,6 +191,13 @@ jobs:
         shell: pwsh
         run: pnpm run cli:build
 
+      - name: Upgrade temporary Tauri checkout for portable paths
+        if: ${{ inputs.mode != 'inspect-source' }}
+        shell: pwsh
+        run: |
+          & .\scripts\Upgrade-Pake-Tauri-Portable.ps1 `
+            -SourceRoot "$PWD\upstream"
+
       - name: Apply true-portable source patch
         if: ${{ inputs.mode != 'inspect-source' }}
         shell: pwsh
