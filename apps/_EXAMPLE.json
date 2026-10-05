@@ -1,0 +1,14 @@
+{
+  "enabled": false,
+  "url": "https://example.com",
+  "name": "Example",
+  "icon": "",
+  "width": 1200,
+  "height": 780,
+  "showSystemTray": true,
+  "hideOnClose": true,
+  "startToTray": false,
+  "incognito": false,
+  "enableFind": true,
+  "darkMode": false
+}
