@@ -8,12 +8,13 @@ $ErrorActionPreference = "Stop"
 $utilFile = Join-Path $SourceRoot "src-tauri\src\util.rs"
 $libFile = Join-Path $SourceRoot "src-tauri\src\lib.rs"
 $windowFile = Join-Path $SourceRoot "src-tauri\src\app\window.rs"
-$packageFile = Join-Path $SourceRoot "package.json"
+$cargoLockFile = Join-Path $SourceRoot "src-tauri\Cargo.lock"
+$schemaFile = Join-Path $SourceRoot "node_modules\@tauri-apps\cli\config.schema.json"
 
 $util = Get-Content -LiteralPath $utilFile -Raw
 $lib = Get-Content -LiteralPath $libFile -Raw
 $window = Get-Content -LiteralPath $windowFile -Raw
-$package = Get-Content -LiteralPath $packageFile -Raw | ConvertFrom-Json
+$lock = Get-Content -LiteralPath $cargoLockFile -Raw
 
 foreach ($needle in @(
     '.join("Data")',
@@ -26,7 +27,7 @@ foreach ($needle in @(
 }
 
 foreach ($needle in @(
-    "PAKE_TRUE_PORTABLE_V1",
+    "PAKE_TRUE_PORTABLE_V2",
     'AppDirectoriesOverride::Root("./Data/App".into())',
     ".build(portable_context)"
 )) {
@@ -35,18 +36,38 @@ foreach ($needle in @(
     }
 }
 
-# This is the upstream behavior that makes the separate WebView path patch necessary.
 foreach ($needle in @(
     "get_data_dir(app, package_name)",
     ".data_directory(_data_dir)"
 )) {
     if ($window.IndexOf($needle,[StringComparison]::Ordinal) -lt 0) {
-        throw "Pake WebView path implementation changed upstream: missing $needle"
+        throw "Pake WebView implementation changed upstream: missing $needle"
     }
 }
 
-$tauriCli = [string]$package.dependencies.'@tauri-apps/cli'
-Write-Host "Pake @tauri-apps/cli dependency: $tauriCli"
+$m = [regex]::Match(
+    $lock,
+    '(?ms)\[\[package\]\]\s*name = "tauri-utils"\s*version = "([^"]+)"'
+)
+if (-not $m.Success) {
+    throw "Could not determine tauri-utils version."
+}
+
+$utilsVersion = [version]$m.Groups[1].Value
+Write-Host "tauri-utils: $utilsVersion"
+
+if ($utilsVersion -lt [version]"2.10.0") {
+    throw "tauri-utils is too old for appDirectoriesOverride."
+}
+
+if (-not (Test-Path -LiteralPath $schemaFile -PathType Leaf)) {
+    throw "Tauri CLI schema is missing."
+}
+
+$schema = Get-Content -LiteralPath $schemaFile -Raw
+if ($schema.IndexOf('"appDirectoriesOverride"',[StringComparison]::Ordinal) -lt 0) {
+    throw "Tauri CLI schema does not know appDirectoriesOverride."
+}
 
 Write-Host ""
 Write-Host "Portable source verification PASS." -ForegroundColor Green

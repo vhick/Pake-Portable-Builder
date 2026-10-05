@@ -17,36 +17,7 @@ foreach ($file in @($utilFile,$libFile)) {
 
 function Normalize-Newlines {
     param([string]$Text)
-
-    # GitHub's Windows checkout may produce CRLF, while our patch template uses LF.
-    # Normalize before matching so identical Rust source does not fail purely because
-    # of line endings.
     return $Text.Replace("`r`n","`n").Replace("`r","`n")
-}
-
-function Replace-ExactNormalized {
-    param(
-        [string]$Text,
-        [string]$Old,
-        [string]$New,
-        [string]$Label
-    )
-
-    $Text = Normalize-Newlines $Text
-    $Old = Normalize-Newlines $Old
-    $New = Normalize-Newlines $New
-
-    if ($Text.Contains($New)) {
-        Write-Host "$Label already present." -ForegroundColor DarkGray
-        return $Text
-    }
-
-    if (-not $Text.Contains($Old)) {
-        throw "Could not apply '$Label'. The expected source text was not found after normalizing line endings. Upstream Pake may have changed."
-    }
-
-    Write-Host "Applying: $Label" -ForegroundColor Cyan
-    return $Text.Replace($Old,$New)
 }
 
 function Replace-OneRegex {
@@ -54,10 +25,13 @@ function Replace-OneRegex {
         [string]$Text,
         [string]$Pattern,
         [string]$Replacement,
-        [string]$Label
+        [string]$Label,
+        [string]$DiagnosticNeedle = ""
     )
 
     $Text = Normalize-Newlines $Text
+    $Replacement = Normalize-Newlines $Replacement
+
     $regex = [regex]::new(
         $Pattern,
         [System.Text.RegularExpressions.RegexOptions]::Multiline -bor
@@ -70,14 +44,16 @@ function Replace-OneRegex {
         Write-Host ""
         Write-Host "Patch diagnostic for: $Label" -ForegroundColor Yellow
         Write-Host "Expected exactly one match; found $($matches.Count)." -ForegroundColor Yellow
-        Write-Host ""
 
-        # Show the current get_data_dir area when possible, making future GitHub
-        # logs useful without requiring another inspection workflow first.
-        $start = $Text.IndexOf("pub fn get_data_dir")
-        if ($start -ge 0) {
-            $length = [Math]::Min(1800, $Text.Length - $start)
-            Write-Host $Text.Substring($start,$length)
+        if ($DiagnosticNeedle) {
+            $start = $Text.IndexOf($DiagnosticNeedle,[StringComparison]::Ordinal)
+            if ($start -ge 0) {
+                $from = [Math]::Max(0,$start - 400)
+                $length = [Math]::Min(2400,$Text.Length - $from)
+                Write-Host ""
+                Write-Host "Current source near '$DiagnosticNeedle':" -ForegroundColor Yellow
+                Write-Host $Text.Substring($from,$length)
+            }
         }
 
         throw "Could not apply '$Label'. Upstream Pake may have changed. Failing closed instead of producing a possibly non-portable build."
@@ -88,16 +64,8 @@ function Replace-OneRegex {
 }
 
 # -------------------------------------------------------------------
-# 1. Redirect Pake's EXPLICIT WebView profile.
-#
-# Pake currently calls:
-#   app.path().config_dir()?.join(package_name)
-# and then passes that path to WebviewWindowBuilder.data_directory(...).
-#
-# Tauri explicitly documents that appDirectoriesOverride does NOT override
-# a window's explicit dataDirectory, so this function must be patched too.
+# 1. Pake's explicit WebView data directory
 # -------------------------------------------------------------------
-
 $util = Normalize-Newlines (Get-Content -LiteralPath $utilFile -Raw)
 
 if ($util.Contains('.join("Data")') -and $util.Contains('.join("WebView")')) {
@@ -106,12 +74,11 @@ if ($util.Contains('.join("Data")') -and $util.Contains('.join("WebView")')) {
 else {
     foreach ($required in @(
         "pub fn get_data_dir",
-        ".path()",
         ".config_dir()",
         ".join(package_name)"
     )) {
         if ($util.IndexOf($required,[StringComparison]::Ordinal) -lt 0) {
-            throw "Pake get_data_dir changed upstream: missing '$required'. Re-inspection is required."
+            throw "Pake get_data_dir changed upstream: missing '$required'."
         }
     }
 
@@ -161,39 +128,49 @@ pub fn get_data_dir(app: &AppHandle, package_name: String) -> std::io::Result<Pa
 }
 '@
 
-    # Match the complete current get_data_dir function through the closing brace
-    # immediately before show_toast. This is insensitive to CRLF/LF and harmless
-    # formatting changes inside the function.
-    $pattern = '(?ms)^pub fn get_data_dir\(app:\s*&AppHandle,\s*package_name:\s*String\)\s*->\s*std::io::Result<PathBuf>\s*\{.*?^\}\s*(?=pub fn show_toast)'
+    $utilPattern = '(?ms)^pub fn get_data_dir\s*\(\s*app\s*:\s*&AppHandle\s*,\s*package_name\s*:\s*String\s*\)\s*->\s*std::io::Result\s*<\s*PathBuf\s*>\s*\{.*?^\}\s*(?=pub fn show_toast)'
 
     $util = Replace-OneRegex `
         -Text $util `
-        -Pattern $pattern `
+        -Pattern $utilPattern `
         -Replacement ((Normalize-Newlines $newDataDir) + "`n") `
-        -Label "redirect explicit WebView data directory"
+        -Label "redirect explicit WebView data directory" `
+        -DiagnosticNeedle "pub fn get_data_dir"
 }
 
 Set-Content -LiteralPath $utilFile -Value $util -Encoding UTF8 -NoNewline
 
 # -------------------------------------------------------------------
-# 2. Redirect Tauri/plugin app_* directories to Data\App.
+# 2. Tauri/plugin directories
 #
-# Tauri documents runtime mutation of generate_context!() as a supported way
-# to set AppDirectoriesOverride. Keep this separate from the WebView patch
-# because Pake explicitly configures its WebView data directory.
+# v1.1 still used one exact line match in lib.rs. The new v1.2 patcher
+# matches the current run_app structure by syntax instead of indentation.
 # -------------------------------------------------------------------
-
 $lib = Normalize-Newlines (Get-Content -LiteralPath $libFile -Raw)
 
-$oldConfigLine = '    let (pake_config, tauri_config) = get_pake_config();'
+if ($lib.Contains("PAKE_TRUE_PORTABLE_V2")) {
+    Write-Host "Portable Tauri context patch already present." -ForegroundColor DarkGray
+}
+else {
+    foreach ($required in @(
+        "pub fn run_app()",
+        "get_pake_config()",
+        "tauri::Builder::default()",
+        ".build(tauri::generate_context!())"
+    )) {
+        if ($lib.IndexOf($required,[StringComparison]::Ordinal) -lt 0) {
+            throw "Pake run_app changed upstream: missing '$required'."
+        }
+    }
 
-$newConfigBlock = @'
+    $newConfigBlock = @'
     let (pake_config, tauri_config) = get_pake_config();
 
-    // PAKE_TRUE_PORTABLE_V1
-    // Keep Tauri/plugin data in a dedicated subfolder beside the portable EXE.
-    // Pake's explicit WebView dataDirectory is redirected separately in util.rs.
+    // PAKE_TRUE_PORTABLE_V2
+    // Tauri/plugin app_* paths follow this root. Pake's explicit WebView
+    // data directory is redirected separately in util.rs.
     let mut portable_context = tauri::generate_context!();
+
     #[cfg(target_os = "windows")]
     {
         use tauri::utils::config::AppDirectoriesOverride;
@@ -202,17 +179,24 @@ $newConfigBlock = @'
     }
 '@
 
-$lib = Replace-ExactNormalized `
-    -Text $lib `
-    -Old $oldConfigLine `
-    -New $newConfigBlock `
-    -Label "create portable Tauri context"
+    $configPattern = '(?m)^[ \t]*let\s*\(\s*pake_config\s*,\s*tauri_config\s*\)\s*=\s*get_pake_config\s*\(\s*\)\s*;\s*$'
 
-$lib = Replace-ExactNormalized `
-    -Text $lib `
-    -Old '        .build(tauri::generate_context!())' `
-    -New '        .build(portable_context)' `
-    -Label "build with portable Tauri context"
+    $lib = Replace-OneRegex `
+        -Text $lib `
+        -Pattern $configPattern `
+        -Replacement (Normalize-Newlines $newConfigBlock) `
+        -Label "create portable Tauri context" `
+        -DiagnosticNeedle "get_pake_config"
+
+    $buildPattern = '(?m)^[ \t]*\.build\s*\(\s*tauri::generate_context!\s*\(\s*\)\s*\)\s*$'
+
+    $lib = Replace-OneRegex `
+        -Text $lib `
+        -Pattern $buildPattern `
+        -Replacement '        .build(portable_context)' `
+        -Label "build with portable Tauri context" `
+        -DiagnosticNeedle ".build("
+}
 
 Set-Content -LiteralPath $libFile -Value $lib -Encoding UTF8 -NoNewline
 
@@ -220,18 +204,13 @@ $revision = (git -C $SourceRoot rev-parse HEAD).Trim()
 
 [ordered]@{
     patch = "Pake Windows true-portable"
-    patch_version = "1.1"
+    patch_version = "1.2"
     upstream_revision = $revision
     applied_at = (Get-Date).ToString("o")
     tauri_app_root = "./Data/App"
     webview_root = "./Data/WebView/<productName>"
     downloads = "normal Windows Downloads directory"
-    patch_matching = "CRLF/LF-safe"
-    notes = @(
-        "Tauri/plugin app directories are redirected at runtime.",
-        "Pake's explicit WebView dataDirectory is redirected separately.",
-        "Downloads intentionally remain in the normal Windows Downloads folder."
-    )
+    matching = "CRLF/LF-safe bounded regex"
 } |
     ConvertTo-Json -Depth 6 |
     Set-Content -LiteralPath (Join-Path $SourceRoot ".pake-true-portable-patch.json") -Encoding UTF8
