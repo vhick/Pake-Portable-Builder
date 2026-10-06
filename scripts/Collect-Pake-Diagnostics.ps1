@@ -40,6 +40,7 @@ $copies = @(
     "src-tauri\Cargo.lock",
     "package.json",
     "pnpm-lock.yaml",
+    "schema\pake.schema.json",
     ".pake-true-portable-patch.json",
     ".pake-portable-version-state.json",
     "src-tauri\.pake\tauri.conf.json",
@@ -64,3 +65,16 @@ try {
 }
 
 Write-Host "Failure diagnostics collected at $OutputRoot"
+
+
+$runDir = Join-Path $SourceRoot ".pake-portable-run"
+
+if (Test-Path -LiteralPath $runDir -PathType Container) {
+    $runOut = Join-Path $OutputRoot "pake-portable-run"
+    New-Item -ItemType Directory -Path $runOut -Force | Out-Null
+
+    Get-ChildItem -LiteralPath $runDir -File -Force -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $runOut $_.Name) -Force
+        }
+}

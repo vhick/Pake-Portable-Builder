@@ -77,7 +77,7 @@ foreach ($file in $configs) {
         -ProxyUrl ([string](Get-Value $cfg "proxyUrl" "")) `
         -Debug ([bool](Get-Value $cfg "debug" $false)) `
         -IgnoreCertificateErrors ([bool](Get-Value $cfg "ignoreCertificateErrors" $false)) `
-        -Targets ([string](Get-Value $cfg "targets" "x64")) `
+        -Targets ([string](Get-Value $cfg "targets" "")) `
         -AppVersion ([string](Get-Value $cfg "appVersion" ""))
 
     $built++

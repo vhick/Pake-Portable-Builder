@@ -80,3 +80,19 @@ Set:
 
 for every app you want rebuilt automatically when your synchronized Pake fork
 receives a new upstream commit.
+
+
+CONFIG-BASED BUILD ENGINE
+-------------------------
+This pack no longer assembles a very long Pake command line.
+
+It generates a temporary JSON config and runs:
+
+  pake --config <generated-file> --json
+
+This uses Pake's published configuration schema and gives much cleaner error
+messages for automation.
+
+`targets` now defaults to an empty string in saved app definitions. Empty means
+Pake auto-detects the native Windows architecture. Set it to `x64` or `arm64`
+only when you specifically want to force that target.

@@ -35,5 +35,5 @@
   "proxyUrl": "",
   "debug": false,
   "ignoreCertificateErrors": false,
-  "targets": "x64"
+  "targets": ""
 }

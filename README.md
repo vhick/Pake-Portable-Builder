@@ -73,3 +73,21 @@ shortcuts remain enabled unless you deliberately turn them off.
 Pake's native navigation/zoom/window application menu is upstream macOS-only.
 This builder does not pretend to add that unsupported native menu to Windows;
 Windows uses Pake's hotkeys, tray behavior and window controls instead.
+
+
+## Config-based feature builds
+
+Windows feature builds now use Pake's declarative JSON configuration interface
+instead of assembling dozens of CLI flags.
+
+The builder writes a temporary config, checks its field names against the
+checked-out `schema/pake.schema.json`, and runs Pake with `--json`.
+
+On failure the diagnostics artifact now includes:
+- generated Pake JSON config;
+- Pake JSON stdout;
+- Pake stderr/build log;
+- exact `pake --help`;
+- the checked-out Pake config schema.
+
+This makes future upstream option changes much easier to diagnose.
