@@ -37,7 +37,7 @@
     [bool]$EnableDragDrop = $false,
     [bool]$MultiInstance = $false,
     [string]$ProxyUrl = "",
-    [bool]$Debug = $false,
+    [bool]$PakeDebug = $false,
     [bool]$IgnoreCertificateErrors = $false,
     [string]$Targets = "",
     [string]$AppVersion = ""
@@ -118,7 +118,7 @@ function Set-Stage {
     enableDragDrop = $EnableDragDrop
     multiInstance = $MultiInstance
     proxyUrl = $ProxyUrl
-    debug = $Debug
+    debug = $PakeDebug
     ignoreCertificateErrors = $IgnoreCertificateErrors
     targets = $Targets
     appVersion = $AppVersion
@@ -175,7 +175,7 @@ $config = [ordered]@{
 
     wasm = $Wasm
     enableDragDrop = $EnableDragDrop
-    debug = $Debug
+    debug = $PakeDebug
     ignoreCertificateErrors = $IgnoreCertificateErrors
 
     # Keep the raw Windows executable for our portable package.

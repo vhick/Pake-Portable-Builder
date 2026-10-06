@@ -75,7 +75,7 @@ foreach ($file in $configs) {
         -EnableDragDrop ([bool](Get-Value $cfg "enableDragDrop" $false)) `
         -MultiInstance ([bool](Get-Value $cfg "multiInstance" $false)) `
         -ProxyUrl ([string](Get-Value $cfg "proxyUrl" "")) `
-        -Debug ([bool](Get-Value $cfg "debug" $false)) `
+        -PakeDebug ([bool](Get-Value $cfg "debug" $false)) `
         -IgnoreCertificateErrors ([bool](Get-Value $cfg "ignoreCertificateErrors" $false)) `
         -Targets ([string](Get-Value $cfg "targets" "")) `
         -AppVersion ([string](Get-Value $cfg "appVersion" ""))
