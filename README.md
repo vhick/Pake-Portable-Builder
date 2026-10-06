@@ -91,3 +91,18 @@ On failure the diagnostics artifact now includes:
 - the checked-out Pake config schema.
 
 This makes future upstream option changes much easier to diagnose.
+
+
+## v1.3 preflight fix
+
+The config-based builder now creates its diagnostic folder before any wrapper
+validation and delegates config validation to Pake itself.
+
+This avoids maintaining a second, duplicate schema validator in PowerShell.
+
+If a build fails, the diagnostics artifact should now contain:
+- `stage.txt`
+- `builder-inputs.json`
+- `pake-build-config.json` when config generation was reached
+- `pake-help.txt` when CLI discovery was reached
+- `pake-stdout.json` and `pake-stderr.log` when Pake itself was launched
