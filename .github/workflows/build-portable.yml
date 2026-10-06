@@ -11,7 +11,7 @@ on:
         options:
           - one-off
           - rebuild-saved
-          - inspect-source
+          - inspect-storage
 
       upstream_repo:
         description: Source repository (leave blank for YOUR-USERNAME/Pake)
@@ -137,32 +137,32 @@ jobs:
           "sha=$rev" >> $env:GITHUB_OUTPUT
           Write-Host "Source revision: $rev"
 
-      - name: Inspect current Pake source
-        if: ${{ inputs.mode == 'inspect-source' }}
+      - name: Inspect pristine Pake storage paths
+        if: ${{ inputs.mode == 'inspect-storage' }}
         shell: pwsh
         run: |
-          & .\scripts\Inspect-Pake-Source.ps1 `
+          & .\scripts\Inspect-Pake-Storage.ps1 `
             -SourceRoot "$PWD\upstream" `
-            -OutputRoot "$PWD\artifact\Pake-Inspection"
+            -OutputRoot "$PWD\artifact\Pake-Storage-Inspection"
 
-      - name: Upload source inspection
-        if: ${{ inputs.mode == 'inspect-source' }}
+      - name: Upload storage-path inspection
+        if: ${{ inputs.mode == 'inspect-storage' }}
         uses: actions/upload-artifact@v7
         with:
-          name: Pake-Portable-Source-Inspection-${{ steps.revision.outputs.sha }}
-          path: artifact/Pake-Inspection/**
+          name: Pake-Storage-Inspection-${{ steps.revision.outputs.sha }}
+          path: artifact/Pake-Storage-Inspection/**
           if-no-files-found: error
           retention-days: 30
 
       - name: Install pnpm 10.26.2
-        if: ${{ inputs.mode != 'inspect-source' }}
+        if: ${{ inputs.mode != 'inspect-storage' }}
         uses: pnpm/action-setup@v6.0.3
         with:
           version: 10.26.2
           run_install: false
 
       - name: Setup Node 22
-        if: ${{ inputs.mode != 'inspect-source' }}
+        if: ${{ inputs.mode != 'inspect-storage' }}
         uses: actions/setup-node@v7
         with:
           node-version: "22"
@@ -170,53 +170,53 @@ jobs:
           cache-dependency-path: upstream/pnpm-lock.yaml
 
       - name: Setup Rust
-        if: ${{ inputs.mode != 'inspect-source' }}
+        if: ${{ inputs.mode != 'inspect-storage' }}
         uses: dtolnay/rust-toolchain@stable
 
       - name: Rust cache
-        if: ${{ inputs.mode != 'inspect-source' }}
+        if: ${{ inputs.mode != 'inspect-storage' }}
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: upstream/src-tauri
 
       - name: Install Pake dependencies
-        if: ${{ inputs.mode != 'inspect-source' }}
+        if: ${{ inputs.mode != 'inspect-storage' }}
         working-directory: upstream
         shell: pwsh
         run: pnpm install --frozen-lockfile
 
       - name: Build Pake CLI
-        if: ${{ inputs.mode != 'inspect-source' }}
+        if: ${{ inputs.mode != 'inspect-storage' }}
         working-directory: upstream
         shell: pwsh
         run: pnpm run cli:build
 
       - name: Upgrade temporary Tauri checkout for portable paths
-        if: ${{ inputs.mode != 'inspect-source' }}
+        if: ${{ inputs.mode != 'inspect-storage' }}
         shell: pwsh
         run: |
           & .\scripts\Upgrade-Pake-Tauri-Portable.ps1 `
             -SourceRoot "$PWD\upstream"
 
       - name: Apply true-portable source patch
-        if: ${{ inputs.mode != 'inspect-source' }}
+        if: ${{ inputs.mode != 'inspect-storage' }}
         shell: pwsh
         run: |
           & .\scripts\Apply-Pake-Portable-Patch.ps1 `
             -SourceRoot "$PWD\upstream"
 
       - name: Verify portable patch
-        if: ${{ inputs.mode != 'inspect-source' }}
+        if: ${{ inputs.mode != 'inspect-storage' }}
         shell: pwsh
         run: |
           & .\scripts\Verify-Pake-Portable-Source.ps1 `
             -SourceRoot "$PWD\upstream"
 
       - name: Compile-check patched Pake source
-        if: ${{ inputs.mode != 'inspect-source' }}
+        if: ${{ inputs.mode != 'inspect-storage' }}
         working-directory: upstream/src-tauri
         shell: pwsh
-        run: cargo check --features cli-build
+        run: cargo check
 
       - name: Build one-off portable app
         if: ${{ inputs.mode == 'one-off' }}
@@ -249,7 +249,7 @@ jobs:
             -OutputRoot "$PWD\artifact\Pake-Portable-Apps"
 
       - name: Upload portable app(s)
-        if: ${{ inputs.mode != 'inspect-source' }}
+        if: ${{ inputs.mode != 'inspect-storage' }}
         uses: actions/upload-artifact@v7
         with:
           name: Pake-Portable-Windows-x64-${{ steps.revision.outputs.sha }}
@@ -258,7 +258,7 @@ jobs:
           retention-days: 30
 
       - name: Collect failure diagnostics
-        if: ${{ failure() && inputs.mode != 'inspect-source' }}
+        if: ${{ failure() && inputs.mode != 'inspect-storage' }}
         shell: pwsh
         run: |
           & .\scripts\Collect-Pake-Diagnostics.ps1 `
@@ -266,7 +266,7 @@ jobs:
             -OutputRoot "$PWD\artifact\Pake-Failure-Diagnostics"
 
       - name: Upload failure diagnostics
-        if: ${{ failure() && inputs.mode != 'inspect-source' }}
+        if: ${{ failure() && inputs.mode != 'inspect-storage' }}
         uses: actions/upload-artifact@v7
         with:
           name: Pake-Portable-FAILURE-Diagnostics-${{ steps.revision.outputs.sha }}
