@@ -84,6 +84,68 @@ on:
         type: boolean
         default: false
 
+      min_width:
+        description: Minimum window width (0 = Pake default)
+        required: false
+        default: "0"
+
+      min_height:
+        description: Minimum window height (0 = Pake default)
+        required: false
+        default: "0"
+
+      zoom:
+        description: Initial zoom percent (50-200)
+        required: false
+        default: "100"
+
+      hide_window_decorations:
+        description: Frameless Windows window with drag region
+        required: false
+        type: boolean
+        default: false
+
+      fullscreen:
+        description: Start in fullscreen
+        required: false
+        type: boolean
+        default: false
+
+      maximize:
+        description: Start maximized
+        required: false
+        type: boolean
+        default: false
+
+      activation_shortcut:
+        description: Global show/hide shortcut, e.g. CmdOrControl+Shift+P
+        required: false
+        default: ""
+
+      always_on_top:
+        description: Keep window always on top
+        required: false
+        type: boolean
+        default: false
+
+      force_internal_navigation:
+        description: Keep clicked links inside the Pake window
+        required: false
+        type: boolean
+        default: false
+
+      multi_window:
+        description: Allow multiple windows in one app process
+        required: false
+        type: boolean
+        default: false
+
+      new_window:
+        description: Allow websites to open popup/new windows
+        required: false
+        type: boolean
+        default: false
+
 permissions:
   contents: read
 
@@ -236,7 +298,18 @@ jobs:
             -StartToTray ([System.Convert]::ToBoolean("${{ inputs.start_to_tray }}")) `
             -Incognito ([System.Convert]::ToBoolean("${{ inputs.incognito }}")) `
             -EnableFind ([System.Convert]::ToBoolean("${{ inputs.enable_find }}")) `
-            -DarkMode ([System.Convert]::ToBoolean("${{ inputs.dark_mode }}"))
+            -DarkMode ([System.Convert]::ToBoolean("${{ inputs.dark_mode }}")) `
+            -MinWidth ([int]"${{ inputs.min_width }}") `
+            -MinHeight ([int]"${{ inputs.min_height }}") `
+            -Zoom ([int]"${{ inputs.zoom }}") `
+            -HideWindowDecorations ([System.Convert]::ToBoolean("${{ inputs.hide_window_decorations }}")) `
+            -Fullscreen ([System.Convert]::ToBoolean("${{ inputs.fullscreen }}")) `
+            -Maximize ([System.Convert]::ToBoolean("${{ inputs.maximize }}")) `
+            -ActivationShortcut "${{ inputs.activation_shortcut }}" `
+            -AlwaysOnTop ([System.Convert]::ToBoolean("${{ inputs.always_on_top }}")) `
+            -ForceInternalNavigation ([System.Convert]::ToBoolean("${{ inputs.force_internal_navigation }}")) `
+            -MultiWindow ([System.Convert]::ToBoolean("${{ inputs.multi_window }}")) `
+            -NewWindow ([System.Convert]::ToBoolean("${{ inputs.new_window }}"))
 
       - name: Rebuild saved portable apps
         if: ${{ inputs.mode == 'rebuild-saved' }}
