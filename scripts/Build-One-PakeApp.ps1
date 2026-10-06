@@ -39,10 +39,7 @@
     [string]$ProxyUrl = "",
     [bool]$Debug = $false,
     [bool]$IgnoreCertificateErrors = $false,
-
-    # Empty = let Pake auto-detect the native Windows architecture.
     [string]$Targets = "",
-
     [string]$AppVersion = ""
 )
 
@@ -52,6 +49,85 @@ $SourceRoot = [IO.Path]::GetFullPath($SourceRoot)
 $KitRoot = [IO.Path]::GetFullPath($KitRoot)
 $OutputRoot = [IO.Path]::GetFullPath($OutputRoot)
 
+# -------------------------------------------------------------------
+# IMPORTANT v1.3:
+# Create diagnostics BEFORE any wrapper/preflight check.
+#
+# The previous failure artifact had NO .pake-portable-run folder and no
+# generated .pake config files. That proves the failure happened before
+# Pake itself was launched.
+# -------------------------------------------------------------------
+
+$runDir = Join-Path $SourceRoot ".pake-portable-run"
+
+if (Test-Path -LiteralPath $runDir) {
+    Remove-Item -LiteralPath $runDir -Recurse -Force
+}
+
+New-Item -ItemType Directory -Path $runDir -Force | Out-Null
+
+$configPath = Join-Path $runDir "pake-build-config.json"
+$stdoutPath = Join-Path $runDir "pake-stdout.json"
+$stderrPath = Join-Path $runDir "pake-stderr.log"
+$helpPath = Join-Path $runDir "pake-help.txt"
+$stagePath = Join-Path $runDir "stage.txt"
+$inputsPath = Join-Path $runDir "builder-inputs.json"
+
+function Set-Stage {
+    param([string]$Stage)
+
+    Set-Content -LiteralPath $stagePath -Encoding UTF8 -Value @(
+        "Stage: $Stage",
+        "Time: $(Get-Date -Format o)"
+    )
+
+    Write-Host ""
+    Write-Host "Pake portable stage: $Stage" -ForegroundColor Cyan
+}
+
+[ordered]@{
+    url = $Url
+    name = $Name
+    icon = $Icon
+    width = $Width
+    height = $Height
+    minWidth = $MinWidth
+    minHeight = $MinHeight
+    zoom = $Zoom
+    showSystemTray = $ShowSystemTray
+    hideOnClose = $HideOnClose
+    startToTray = $StartToTray
+    incognito = $Incognito
+    enableFind = $EnableFind
+    darkMode = $DarkMode
+    hideWindowDecorations = $HideWindowDecorations
+    fullscreen = $Fullscreen
+    maximize = $Maximize
+    activationShortcut = $ActivationShortcut
+    alwaysOnTop = $AlwaysOnTop
+    forceInternalNavigation = $ForceInternalNavigation
+    multiWindow = $MultiWindow
+    newWindow = $NewWindow
+    title = $Title
+    disabledWebShortcuts = $DisabledWebShortcuts
+    internalUrlRegex = $InternalUrlRegex
+    safeDomain = $SafeDomain
+    userAgent = $UserAgent
+    systemTrayIcon = $SystemTrayIcon
+    wasm = $Wasm
+    enableDragDrop = $EnableDragDrop
+    multiInstance = $MultiInstance
+    proxyUrl = $ProxyUrl
+    debug = $Debug
+    ignoreCertificateErrors = $IgnoreCertificateErrors
+    targets = $Targets
+    appVersion = $AppVersion
+} |
+    ConvertTo-Json -Depth 10 |
+    Set-Content -LiteralPath $inputsPath -Encoding UTF8
+
+Set-Stage "wrapper-started"
+
 if ([string]::IsNullOrWhiteSpace($Url)) {
     throw "URL is required."
 }
@@ -60,34 +136,13 @@ if ([string]::IsNullOrWhiteSpace($Name)) {
     throw "App name is required."
 }
 
-if ($StartToTray -and -not $ShowSystemTray) {
-    throw "StartToTray requires ShowSystemTray."
-}
-
-if (-not [string]::IsNullOrWhiteSpace($SystemTrayIcon) -and -not $ShowSystemTray) {
-    throw "SystemTrayIcon requires ShowSystemTray."
-}
-
-if ($Zoom -lt 50 -or $Zoom -gt 200) {
-    throw "Zoom must be between 50 and 200."
-}
-
-if ($MinWidth -lt 0 -or $MinHeight -lt 0) {
-    throw "MinWidth and MinHeight cannot be negative."
-}
-
-if (
-    -not [string]::IsNullOrWhiteSpace($Targets) -and
-    $Targets -notin @("x64","arm64")
-) {
-    throw "For this Windows builder, Targets must be blank, x64, or arm64."
-}
-
 # -------------------------------------------------------------------
-# Build through Pake's DECLARATIVE JSON config interface.
+# Build Pake's official declarative config.
 #
-# This is more robust than assembling a long command line. Pake publishes a
-# schema for the config file and validates unknown fields/types/ranges itself.
+# Deliberately do NOT duplicate Pake's own schema validation here.
+# Pake already validates unknown fields, types, ranges and unsupported
+# combinations. Duplicating that logic in PowerShell caused the last
+# failure before the CLI was even launched.
 # -------------------------------------------------------------------
 
 $config = [ordered]@{
@@ -123,11 +178,10 @@ $config = [ordered]@{
     debug = $Debug
     ignoreCertificateErrors = $IgnoreCertificateErrors
 
-    # We need the standalone EXE for the portable package.
+    # Keep the raw Windows executable for our portable package.
     keepBinary = $true
 }
 
-# Only include optional strings when the user supplied a value.
 $optionalStrings = [ordered]@{
     icon = $Icon
     title = $Title
@@ -147,53 +201,17 @@ foreach ($item in $optionalStrings.GetEnumerator()) {
     }
 }
 
-# -------------------------------------------------------------------
-# Validate our generated field names against the exact Pake checkout.
-# If Pake removes or renames a config field in the future, fail here with a
-# clean message instead of reaching a cryptic build error.
-# -------------------------------------------------------------------
-
-$schemaFile = Join-Path $SourceRoot "schema\pake.schema.json"
-
-if (Test-Path -LiteralPath $schemaFile -PathType Leaf) {
-    $schema = Get-Content -LiteralPath $schemaFile -Raw | ConvertFrom-Json
-    $allowed = @($schema.properties.PSObject.Properties.Name)
-
-    foreach ($key in $config.Keys) {
-        if ($key -notin $allowed) {
-            throw "Current Pake schema does not support config field '$key'. Run inspect-storage / inspect upstream before rebuilding."
-        }
-    }
-}
-else {
-    Write-Host "Pake schema file was not found; continuing with CLI validation." -ForegroundColor Yellow
-}
-
-# Keep all run-time troubleshooting material in one known directory.
-$runDir = Join-Path $SourceRoot ".pake-portable-run"
-
-if (Test-Path -LiteralPath $runDir) {
-    Remove-Item -LiteralPath $runDir -Recurse -Force
-}
-
-New-Item -ItemType Directory -Path $runDir -Force | Out-Null
-
-$configPath = Join-Path $runDir "pake-build-config.json"
-$stdoutPath = Join-Path $runDir "pake-stdout.json"
-$stderrPath = Join-Path $runDir "pake-stderr.log"
-$helpPath = Join-Path $runDir "pake-help.txt"
-
 $config |
     ConvertTo-Json -Depth 10 |
     Set-Content -LiteralPath $configPath -Encoding UTF8
 
+Set-Stage "config-written"
+
 Write-Host ""
-Write-Host "Generated Pake build config:" -ForegroundColor Cyan
-Write-Host "  $configPath"
-Write-Host ""
+Write-Host "Generated Pake config:" -ForegroundColor Cyan
 Get-Content -LiteralPath $configPath | ForEach-Object { Write-Host $_ }
 
-# Capture the exact CLI help from the checked-out revision for diagnostics.
+# Capture the exact CLI help before the build.
 Push-Location $SourceRoot
 try {
     & node "dist/cli.js" --help 2>&1 |
@@ -203,12 +221,10 @@ finally {
     Pop-Location
 }
 
+Set-Stage "cli-help-captured"
+
 # -------------------------------------------------------------------
-# Run Pake in machine-readable JSON mode.
-#
-# Pake documents that --json keeps stdout as one JSON object and sends logs
-# to stderr. Capturing the two streams separately makes future failures much
-# easier to diagnose.
+# Let Pake validate its OWN config and return its OWN structured error.
 # -------------------------------------------------------------------
 
 $argumentList = @(
@@ -217,10 +233,7 @@ $argumentList = @(
     "--json"
 )
 
-Write-Host ""
-Write-Host "Running Pake via JSON config..." -ForegroundColor Cyan
-Write-Host "  node dist/cli.js --config <generated-config> --json"
-Write-Host ""
+Set-Stage "starting-pake-cli"
 
 $process = Start-Process `
     -FilePath "node" `
@@ -232,10 +245,14 @@ $process = Start-Process `
     -RedirectStandardOutput $stdoutPath `
     -RedirectStandardError $stderrPath
 
+Set-Stage "pake-cli-finished"
+
+$stderrText = ""
 if (Test-Path -LiteralPath $stderrPath -PathType Leaf) {
     $stderrText = Get-Content -LiteralPath $stderrPath -Raw -ErrorAction SilentlyContinue
     if (-not [string]::IsNullOrWhiteSpace($stderrText)) {
-        Write-Host "Pake build log:" -ForegroundColor DarkGray
+        Write-Host ""
+        Write-Host "Pake stderr/build log:" -ForegroundColor DarkGray
         Write-Host $stderrText
     }
 }
@@ -246,11 +263,13 @@ if (Test-Path -LiteralPath $stdoutPath -PathType Leaf) {
 }
 
 $result = $null
+
 if (-not [string]::IsNullOrWhiteSpace($stdoutText)) {
     try {
         $result = $stdoutText | ConvertFrom-Json
     }
     catch {
+        Write-Host ""
         Write-Host "Pake stdout was not valid JSON:" -ForegroundColor Yellow
         Write-Host $stdoutText
     }
@@ -268,6 +287,17 @@ if ($process.ExitCode -ne 0) {
         if ($message) { $details += " Message: $message" }
         if ($hint) { $details += " Hint: $hint" }
     }
+    elseif (-not [string]::IsNullOrWhiteSpace($stderrText)) {
+        $firstUseful = @(
+            $stderrText -split "`r?`n" |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            Select-Object -First 8
+        ) -join " | "
+
+        if ($firstUseful) {
+            $details += " Stderr: $firstUseful"
+        }
+    }
 
     throw $details
 }
@@ -278,15 +308,15 @@ if ($null -ne $result -and $result.PSObject.Properties.Name -contains "ok") {
     }
 }
 
+Set-Stage "pake-build-succeeded"
+
 # -------------------------------------------------------------------
-# Locate the standalone EXE.
-# Current Pake documents AppName.exe on Windows when keepBinary=true.
+# Locate the raw EXE produced by keepBinary=true.
 # -------------------------------------------------------------------
 
 $builtExe = Join-Path $SourceRoot "$Name.exe"
 
 if (-not (Test-Path -LiteralPath $builtExe -PathType Leaf)) {
-    # Prefer any JSON-reported .exe output that actually exists.
     if ($null -ne $result -and $null -ne $result.outputs) {
         foreach ($output in @($result.outputs)) {
             $candidate = [string]$output.path
@@ -304,8 +334,6 @@ if (-not (Test-Path -LiteralPath $builtExe -PathType Leaf)) {
 }
 
 if (-not (Test-Path -LiteralPath $builtExe -PathType Leaf)) {
-    Write-Host "Expected root EXE was not found. Searching recent Windows EXEs..." -ForegroundColor Yellow
-
     $searchRoots = @(
         $SourceRoot,
         (Join-Path $SourceRoot "src-tauri\target\release")
@@ -327,12 +355,21 @@ if (-not (Test-Path -LiteralPath $builtExe -PathType Leaf)) {
         )
     }
 
-    $builtExe = @($candidates | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
+    $builtExe = @(
+        $candidates |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    ).FullName
 }
 
-if ([string]::IsNullOrWhiteSpace([string]$builtExe) -or -not (Test-Path -LiteralPath $builtExe -PathType Leaf)) {
+if (
+    [string]::IsNullOrWhiteSpace([string]$builtExe) -or
+    -not (Test-Path -LiteralPath $builtExe -PathType Leaf)
+) {
     throw "Pake reported success but no standalone Windows EXE could be located."
 }
+
+Set-Stage "standalone-exe-found"
 
 Write-Host ""
 Write-Host "Standalone EXE:" -ForegroundColor Green
@@ -346,5 +383,6 @@ Write-Host "  $builtExe"
     -AppName $Name `
     -Url $Url
 
-# Pake may update Cargo.lock while generating a packaged app.
+Set-Stage "portable-package-assembled"
+
 git -C $SourceRoot checkout -- src-tauri/Cargo.lock 2>$null
