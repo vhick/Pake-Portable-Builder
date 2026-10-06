@@ -41,6 +41,7 @@ $copies = @(
     "package.json",
     "pnpm-lock.yaml",
     ".pake-true-portable-patch.json",
+    ".pake-portable-version-state.json",
     "src-tauri\.pake\tauri.conf.json",
     "src-tauri\.pake\pake.json"
 )

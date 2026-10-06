@@ -89,19 +89,40 @@ Write-Host "  WebView profile -> .\Data\WebView\<AppName>" -ForegroundColor Gree
 Write-Host "  Tauri/plugin data -> .\Data\App" -ForegroundColor Green
 Write-Host "  Windows WebView2 dependency family aligned." -ForegroundColor Green
 
-# Verify JavaScript/Rust Tauri package alignment. Tauri CLI expects the
-# Rust tauri crate and @tauri-apps/api to share the same major/minor line.
-$packageFile = Join-Path $SourceRoot "package.json"
-$package = Get-Content -LiteralPath $packageFile -Raw | ConvertFrom-Json
+# Verify the versions that are actually installed/resolved, not the semver
+# prefixes written in package.json. pnpm may preserve ~ or ^ for an existing
+# dependency while still resolving exactly the desired installed version.
 
-$jsApi = [string]$package.dependencies.'@tauri-apps/api'
-$jsCli = [string]$package.dependencies.'@tauri-apps/cli'
+function Get-Installed-Npm-Version {
+    param(
+        [string]$Root,
+        [string]$PackageRelativePath
+    )
 
-if ($jsApi -ne "2.12.1") {
-    throw "@tauri-apps/api is not aligned to 2.12.1."
+    $pkg = Join-Path $Root ("node_modules\" + $PackageRelativePath + "\package.json")
+
+    if (-not (Test-Path -LiteralPath $pkg -PathType Leaf)) {
+        throw "Installed npm package metadata was not found: $pkg"
+    }
+
+    $json = Get-Content -LiteralPath $pkg -Raw | ConvertFrom-Json
+    return [version]([string]$json.version)
 }
-if ($jsCli -ne "2.12.1") {
-    throw "@tauri-apps/cli is not aligned to 2.12.1."
+
+$installedApi = Get-Installed-Npm-Version `
+    -Root $SourceRoot `
+    -PackageRelativePath "@tauri-apps\api"
+
+$installedCli = Get-Installed-Npm-Version `
+    -Root $SourceRoot `
+    -PackageRelativePath "@tauri-apps\cli"
+
+if ($installedApi.Major -ne 2 -or $installedApi.Minor -ne 12) {
+    throw "@tauri-apps/api installed version is not 2.12.x: $installedApi"
+}
+
+if ($installedCli.Major -ne 2 -or $installedCli.Minor -ne 12) {
+    throw "@tauri-apps/cli installed version is not 2.12.x: $installedCli"
 }
 
 $tauriMatch = [regex]::Match(
@@ -116,8 +137,7 @@ if (-not $tauriMatch.Success) {
 $rustTauri = [version]$tauriMatch.Groups[1].Value
 
 if ($rustTauri.Major -ne 2 -or $rustTauri.Minor -ne 12) {
-    throw "Rust tauri is not on the 2.12 line: $rustTauri"
+    throw "Rust tauri is not on the 2.12.x line: $rustTauri"
 }
 
-Write-Host "  JS API/CLI and Rust tauri major/minor are aligned." -ForegroundColor Green
-
+Write-Host "  Installed JS API/CLI and resolved Rust tauri are all on 2.12.x." -ForegroundColor Green
