@@ -17,9 +17,7 @@ function Run-Checked {
     try {
         Write-Host ""
         Write-Host ("> {0} {1}" -f $File,($Arguments -join " ")) -ForegroundColor Cyan
-
         & $File @Arguments
-
         if ($LASTEXITCODE -ne 0) {
             throw "$File failed with exit code $LASTEXITCODE."
         }
@@ -30,23 +28,20 @@ function Run-Checked {
 }
 
 $packageJson = Join-Path $SourceRoot "package.json"
+$cargoToml = Join-Path $SourceRoot "src-tauri\Cargo.toml"
 $cargoLock = Join-Path $SourceRoot "src-tauri\Cargo.lock"
 $tauriRoot = Join-Path $SourceRoot "src-tauri"
 
-if (-not (Test-Path -LiteralPath $packageJson -PathType Leaf)) {
-    throw "package.json was not found."
-}
-
-if (-not (Test-Path -LiteralPath $cargoLock -PathType Leaf)) {
-    throw "src-tauri\Cargo.lock was not found."
+foreach ($file in @($packageJson,$cargoToml,$cargoLock)) {
+    if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
+        throw "Required source file was not found: $file"
+    }
 }
 
 Write-Host ""
-Write-Host "Preparing temporary Pake checkout for Tauri portable-directory support." -ForegroundColor Yellow
-Write-Host "This changes only GitHub's temporary checkout, not your clean Pake fork." -ForegroundColor Yellow
+Write-Host "Preparing ONLY GitHub's temporary Pake checkout." -ForegroundColor Yellow
+Write-Host "Your clean Pake fork is not modified." -ForegroundColor Yellow
 
-# Keep the JS-side Tauri CLI on the current 2.12 line so the config schema knows
-# appDirectoriesOverride.
 Run-Checked `
     -File "pnpm" `
     -Arguments @(
@@ -56,13 +51,6 @@ Run-Checked `
     ) `
     -WorkingDirectory $SourceRoot
 
-# Upgrade the main Rust Tauri crate and LET CARGO RESOLVE its matching family.
-#
-# IMPORTANT:
-# Do NOT force tauri-utils to exactly 2.10.0.
-# With tauri 2.12.0, Cargo currently resolves tauri-macros/codegen 2.7.1,
-# and those require tauri-utils ~2.10.1. The previous v1.2 script incorrectly
-# forced 2.10.0 after Cargo had already selected the compatible 2.10.1.
 Run-Checked `
     -File "cargo" `
     -Arguments @(
@@ -72,63 +60,69 @@ Run-Checked `
     ) `
     -WorkingDirectory $tauriRoot
 
-# From this point forward, only VERIFY the resolved family. Do not downgrade
-# tauri-build/tauri-utils independently from the compatible versions Cargo chose.
+$cargo = Get-Content -LiteralPath $cargoToml -Raw
+
+if ($cargo -notmatch 'webview2-com\s*=\s*"0\.38"') {
+    throw "Expected Pake direct webview2-com 0.38 dependency was not found. Re-inspect before changing versions."
+}
+
+if ($cargo -notmatch 'windows-core\s*=\s*"0\.61\.2"') {
+    throw "Expected Pake direct windows-core 0.61.2 dependency was not found. Re-inspect before changing versions."
+}
+
+$cargo = $cargo -replace 'webview2-com\s*=\s*"0\.38"','webview2-com = "0.39.1"'
+$cargo = $cargo -replace 'windows-core\s*=\s*"0\.61\.2"','windows-core = "0.62.2"'
+
+Set-Content -LiteralPath $cargoToml -Value $cargo -Encoding UTF8
+
+Run-Checked `
+    -File "cargo" `
+    -Arguments @("update") `
+    -WorkingDirectory $tauriRoot
+
 $lock = Get-Content -LiteralPath $cargoLock -Raw
 
-function Get-Cargo-Version {
+function Get-Versions {
     param([string]$Name)
 
     $escaped = [regex]::Escape($Name)
-    $m = [regex]::Match(
-        $lock,
-        "(?ms)\[\[package\]\]\s*name = `"$escaped`"\s*version = `"([^`"]+)`""
+    return @(
+        [regex]::Matches(
+            $lock,
+            "(?ms)\[\[package\]\]\s*name = `"$escaped`"\s*version = `"([^`"]+)`""
+        ) |
+        ForEach-Object { $_.Groups[1].Value } |
+        Sort-Object -Unique
     )
-
-    if (-not $m.Success) {
-        return $null
-    }
-
-    try {
-        return [version]$m.Groups[1].Value
-    }
-    catch {
-        return $null
-    }
 }
 
-$tauri = Get-Cargo-Version "tauri"
-$utils = Get-Cargo-Version "tauri-utils"
-$build = Get-Cargo-Version "tauri-build"
-$macros = Get-Cargo-Version "tauri-macros"
-$codegen = Get-Cargo-Version "tauri-codegen"
+$tauriVersions = Get-Versions "tauri"
+$utilsVersions = Get-Versions "tauri-utils"
+$webviewVersions = Get-Versions "webview2-com"
+$windowsCoreVersions = Get-Versions "windows-core"
 
 Write-Host ""
-Write-Host "Cargo-resolved Tauri family:" -ForegroundColor Cyan
-Write-Host "  tauri:         $tauri"
-Write-Host "  tauri-utils:   $utils"
-Write-Host "  tauri-build:   $build"
-Write-Host "  tauri-macros:  $macros"
-Write-Host "  tauri-codegen: $codegen"
+Write-Host "Resolved versions:" -ForegroundColor Cyan
+Write-Host "  tauri:        $($tauriVersions -join ', ')"
+Write-Host "  tauri-utils:  $($utilsVersions -join ', ')"
+Write-Host "  webview2-com: $($webviewVersions -join ', ')"
+Write-Host "  windows-core: $($windowsCoreVersions -join ', ')"
 
-if (-not $tauri -or $tauri -lt [version]"2.12.0") {
-    throw "tauri was not upgraded to 2.12.0 or newer."
+if (-not ($tauriVersions | Where-Object { [version]$_ -ge [version]"2.12.0" })) {
+    throw "Tauri 2.12+ was not resolved."
 }
 
-if (-not $utils -or $utils -lt [version]"2.10.0") {
-    throw "tauri-utils is too old for appDirectoriesOverride."
+if (-not ($utilsVersions | Where-Object { [version]$_ -ge [version]"2.10.0" })) {
+    throw "tauri-utils 2.10+ was not resolved."
 }
 
-if (-not $build -or $build -lt [version]"2.7.0") {
-    throw "tauri-build is too old for the Tauri 2.12 portable config stack."
-}
+$cargoAfter = Get-Content -LiteralPath $cargoToml -Raw
 
-if (-not $macros -or $macros -lt [version]"2.7.0") {
-    throw "tauri-macros is unexpectedly old."
+if ($cargoAfter.IndexOf('webview2-com = "0.39.1"',[StringComparison]::Ordinal) -lt 0) {
+    throw "Pake direct webview2-com dependency was not aligned to 0.39.1."
 }
-
-if (-not $codegen -or $codegen -lt [version]"2.7.0") {
-    throw "tauri-codegen is unexpectedly old."
+if ($cargoAfter.IndexOf('windows-core = "0.62.2"',[StringComparison]::Ordinal) -lt 0) {
+    throw "Pake direct windows-core dependency was not aligned to 0.62.2."
 }
 
 $schema = Join-Path $SourceRoot "node_modules\@tauri-apps\cli\config.schema.json"
@@ -138,11 +132,9 @@ if (-not (Test-Path -LiteralPath $schema -PathType Leaf)) {
 }
 
 $schemaText = Get-Content -LiteralPath $schema -Raw
-
 if ($schemaText.IndexOf('"appDirectoriesOverride"',[StringComparison]::Ordinal) -lt 0) {
     throw "Installed Tauri CLI schema does not contain appDirectoriesOverride."
 }
 
 Write-Host ""
-Write-Host "Temporary Tauri checkout supports appDirectoriesOverride." -ForegroundColor Green
-Write-Host "No Tauri family member was force-downgraded." -ForegroundColor Green
+Write-Host "Temporary dependency alignment PASS." -ForegroundColor Green
