@@ -88,3 +88,36 @@ Write-Host "  Existing Pake helper functions preserved." -ForegroundColor Green
 Write-Host "  WebView profile -> .\Data\WebView\<AppName>" -ForegroundColor Green
 Write-Host "  Tauri/plugin data -> .\Data\App" -ForegroundColor Green
 Write-Host "  Windows WebView2 dependency family aligned." -ForegroundColor Green
+
+# Verify JavaScript/Rust Tauri package alignment. Tauri CLI expects the
+# Rust tauri crate and @tauri-apps/api to share the same major/minor line.
+$packageFile = Join-Path $SourceRoot "package.json"
+$package = Get-Content -LiteralPath $packageFile -Raw | ConvertFrom-Json
+
+$jsApi = [string]$package.dependencies.'@tauri-apps/api'
+$jsCli = [string]$package.dependencies.'@tauri-apps/cli'
+
+if ($jsApi -ne "2.12.1") {
+    throw "@tauri-apps/api is not aligned to 2.12.1."
+}
+if ($jsCli -ne "2.12.1") {
+    throw "@tauri-apps/cli is not aligned to 2.12.1."
+}
+
+$tauriMatch = [regex]::Match(
+    $lock,
+    '(?ms)\[\[package\]\]\s*name = "tauri"\s*version = "([^"]+)"'
+)
+
+if (-not $tauriMatch.Success) {
+    throw "Could not determine Rust tauri version."
+}
+
+$rustTauri = [version]$tauriMatch.Groups[1].Value
+
+if ($rustTauri.Major -ne 2 -or $rustTauri.Minor -ne 12) {
+    throw "Rust tauri is not on the 2.12 line: $rustTauri"
+}
+
+Write-Host "  JS API/CLI and Rust tauri major/minor are aligned." -ForegroundColor Green
+
