@@ -58,11 +58,15 @@ if ($windowCompact.IndexOf(".data_directory(_data_dir)",[StringComparison]::Ordi
     throw "Pake no longer passes _data_dir to WebView data_directory(...)."
 }
 
-if ($cargo.IndexOf('webview2-com = "0.39.1"',[StringComparison]::Ordinal) -lt 0) {
-    throw "webview2-com direct dependency is not aligned."
+# Cargo.toml may pin exact versions using a leading "=" inside the version
+# string, e.g. webview2-com = "=0.39.1". Verify the semantic version instead
+# of requiring one exact line spelling.
+if ($cargo -notmatch '(?m)^\s*webview2-com\s*=\s*"=?0\.39\.1"\s*$') {
+    throw "webview2-com direct dependency is not aligned to 0.39.1."
 }
-if ($cargo.IndexOf('windows-core = "0.62.2"',[StringComparison]::Ordinal) -lt 0) {
-    throw "windows-core direct dependency is not aligned."
+
+if ($cargo -notmatch '(?m)^\s*windows-core\s*=\s*"=?0\.62\.2"\s*$') {
+    throw "windows-core direct dependency is not aligned to 0.62.2."
 }
 
 $m = [regex]::Match(
