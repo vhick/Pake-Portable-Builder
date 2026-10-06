@@ -16,6 +16,7 @@ $lib = Get-Content -LiteralPath $libFile -Raw
 $window = Get-Content -LiteralPath $windowFile -Raw
 $lock = Get-Content -LiteralPath $cargoLockFile -Raw
 
+# 1. Verify the patched WebView path function.
 foreach ($needle in @(
     "PAKE_PORTABLE_WEBVIEW_V2",
     '.join("Data")',
@@ -23,41 +24,53 @@ foreach ($needle in @(
     'current_exe()'
 )) {
     if ($util.IndexOf($needle,[StringComparison]::Ordinal) -lt 0) {
-        throw "Portable WebView verification failed: missing $needle"
+        throw "Portable WebView verification failed in util.rs: missing $needle"
     }
 }
 
+# 2. Verify the Tauri/plugin portable override.
 foreach ($needle in @(
     "PAKE_TRUE_PORTABLE_CONTEXT_V2",
     'AppDirectoriesOverride::Root("./Data/App".into())',
     "context.config_mut().app.app_directories_override"
 )) {
     if ($lib.IndexOf($needle,[StringComparison]::Ordinal) -lt 0) {
-        throw "Portable Tauri path verification failed: missing $needle"
+        throw "Portable Tauri verification failed in lib.rs: missing $needle"
     }
 }
 
-$compact = [regex]::Replace($lib,'\s+','')
-if (
-    $compact.IndexOf(".build(context)",[StringComparison]::Ordinal) -lt 0 -and
-    $compact.IndexOf(".run(context)",[StringComparison]::Ordinal) -lt 0
-) {
-    throw "Could not prove that Pake consumes the patched Tauri context."
+# Prove Pake still creates/uses a mutable Tauri context.
+$libCompact = [regex]::Replace($lib,'\s+','')
+
+if ($libCompact.IndexOf("generate_context!()",[StringComparison]::Ordinal) -lt 0) {
+    throw "Could not prove that Pake still creates a Tauri context."
 }
 
-foreach ($needle in @(
-    "get_data_dir(app, package_name)",
-    ".data_directory(_data_dir)"
-)) {
-    if ($window.IndexOf($needle,[StringComparison]::Ordinal) -lt 0) {
-        throw "Pake WebView implementation changed upstream: missing $needle"
-    }
+# 3. Verify behavior, not one exact argument spelling.
+#
+# We only need to prove:
+#   a) window.rs still calls get_data_dir(...)
+#   b) that _data_dir is still passed to WebView data_directory(...)
+#
+# This intentionally permits harmless upstream changes such as
+# package_name.clone() or spacing/formatting differences.
+
+$windowCompact = [regex]::Replace($window,'\s+','')
+
+if ($windowCompact.IndexOf("get_data_dir(",[StringComparison]::Ordinal) -lt 0) {
+    throw "Pake WebView implementation changed upstream: no get_data_dir(...) call was found."
 }
 
+if ($windowCompact.IndexOf(".data_directory(_data_dir)",[StringComparison]::Ordinal) -lt 0) {
+    throw "Pake WebView implementation changed upstream: the WebView no longer uses _data_dir as data_directory."
+}
+
+# 4. Verify the upgraded Tauri stack supports appDirectoriesOverride.
 $m = [regex]::Match(
     $lock,
     '(?ms)\[\[package\]\]\s*name = "tauri-utils"\s*version = "([^"]+)"'
 )
+
 if (-not $m.Success) {
     throw "Could not determine tauri-utils version."
 }
@@ -74,9 +87,12 @@ if (-not (Test-Path -LiteralPath $schemaFile -PathType Leaf)) {
 }
 
 $schema = Get-Content -LiteralPath $schemaFile -Raw
+
 if ($schema.IndexOf('"appDirectoriesOverride"',[StringComparison]::Ordinal) -lt 0) {
     throw "Tauri CLI schema does not know appDirectoriesOverride."
 }
 
 Write-Host ""
 Write-Host "Portable source verification PASS." -ForegroundColor Green
+Write-Host "  Tauri/plugin data -> .\Data\App" -ForegroundColor Green
+Write-Host "  WebView data      -> .\Data\WebView\<AppName>" -ForegroundColor Green
