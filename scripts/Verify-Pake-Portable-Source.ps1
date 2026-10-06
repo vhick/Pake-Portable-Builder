@@ -17,23 +17,32 @@ $window = Get-Content -LiteralPath $windowFile -Raw
 $lock = Get-Content -LiteralPath $cargoLockFile -Raw
 
 foreach ($needle in @(
+    "PAKE_PORTABLE_WEBVIEW_V2",
     '.join("Data")',
     '.join("WebView")',
     'current_exe()'
 )) {
     if ($util.IndexOf($needle,[StringComparison]::Ordinal) -lt 0) {
-        throw "Portable WebView path verification failed: missing $needle"
+        throw "Portable WebView verification failed: missing $needle"
     }
 }
 
 foreach ($needle in @(
-    "PAKE_TRUE_PORTABLE_V2",
+    "PAKE_TRUE_PORTABLE_CONTEXT_V2",
     'AppDirectoriesOverride::Root("./Data/App".into())',
-    ".build(portable_context)"
+    "context.config_mut().app.app_directories_override"
 )) {
     if ($lib.IndexOf($needle,[StringComparison]::Ordinal) -lt 0) {
         throw "Portable Tauri path verification failed: missing $needle"
     }
+}
+
+$compact = [regex]::Replace($lib,'\s+','')
+if (
+    $compact.IndexOf(".build(context)",[StringComparison]::Ordinal) -lt 0 -and
+    $compact.IndexOf(".run(context)",[StringComparison]::Ordinal) -lt 0
+) {
+    throw "Could not prove that Pake consumes the patched Tauri context."
 }
 
 foreach ($needle in @(

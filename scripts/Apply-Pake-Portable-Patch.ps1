@@ -20,36 +20,40 @@ function Normalize-Newlines {
     return $Text.Replace("`r`n","`n").Replace("`r","`n")
 }
 
-function Fail-With-Context {
+function Show-Context {
     param(
         [string]$Text,
         [string]$Needle,
-        [string]$Message
+        [string]$Label
     )
 
     Write-Host ""
-    Write-Host "Patch diagnostic:" -ForegroundColor Yellow
-    Write-Host $Message -ForegroundColor Yellow
+    Write-Host "SOURCE DIAGNOSTIC: $Label" -ForegroundColor Yellow
 
     $idx = $Text.IndexOf($Needle,[StringComparison]::Ordinal)
     if ($idx -ge 0) {
-        $from = [Math]::Max(0,$idx - 700)
-        $length = [Math]::Min(4200,$Text.Length - $from)
-        Write-Host ""
+        $from = [Math]::Max(0,$idx - 900)
+        $length = [Math]::Min(5200,$Text.Length - $from)
         Write-Host $Text.Substring($from,$length)
+    } else {
+        Write-Host "Needle not found: $Needle" -ForegroundColor Yellow
     }
 
-    throw $Message
+    Write-Host ""
 }
 
-# -------------------------------------------------------------------
-# 1. Redirect Pake's explicit WebView data directory.
-# -------------------------------------------------------------------
+# ===================================================================
+# A. Pake's explicit WebView data directory
+# ===================================================================
+#
+# Pake explicitly supplies WebviewWindowBuilder.data_directory(...), so
+# Tauri's appDirectoriesOverride cannot move this path. Keep this separate.
+# ===================================================================
 
 $util = Normalize-Newlines (Get-Content -LiteralPath $utilFile -Raw)
 
-if ($util.Contains('.join("Data")') -and $util.Contains('.join("WebView")')) {
-    Write-Host "WebView path patch already present." -ForegroundColor DarkGray
+if ($util.Contains('PAKE_PORTABLE_WEBVIEW_V2')) {
+    Write-Host "Portable WebView patch already present." -ForegroundColor DarkGray
 }
 else {
     foreach ($required in @(
@@ -58,32 +62,21 @@ else {
         ".join(package_name)"
     )) {
         if ($util.IndexOf($required,[StringComparison]::Ordinal) -lt 0) {
-            Fail-With-Context `
-                -Text $util `
-                -Needle "pub fn get_data_dir" `
-                -Message "Pake get_data_dir changed upstream: missing '$required'."
+            Show-Context -Text $util -Needle "pub fn get_data_dir" -Label "get_data_dir changed"
+            throw "Pake get_data_dir no longer has the expected storage behavior. Re-inspection is required."
         }
     }
 
-    $start = $util.IndexOf(
-        "pub fn get_data_dir",
-        [StringComparison]::Ordinal
-    )
-
-    $next = $util.IndexOf(
-        "pub fn show_toast",
-        $start + 1,
-        [StringComparison]::Ordinal
-    )
+    $start = $util.IndexOf("pub fn get_data_dir",[StringComparison]::Ordinal)
+    $next = $util.IndexOf("pub fn show_toast",$start + 1,[StringComparison]::Ordinal)
 
     if ($start -lt 0 -or $next -lt 0 -or $next -le $start) {
-        Fail-With-Context `
-            -Text $util `
-            -Needle "pub fn get_data_dir" `
-            -Message "Could not determine the get_data_dir function boundaries."
+        Show-Context -Text $util -Needle "pub fn get_data_dir" -Label "get_data_dir boundaries"
+        throw "Could not determine get_data_dir function boundaries."
     }
 
     $newDataDir = @'
+// PAKE_PORTABLE_WEBVIEW_V2
 pub fn get_data_dir(app: &AppHandle, package_name: String) -> std::io::Result<PathBuf> {
     let data_dir = if cfg!(target_os = "windows") {
         let executable = std::env::current_exe().map_err(|err| {
@@ -135,146 +128,102 @@ pub fn get_data_dir(app: &AppHandle, package_name: String) -> std::io::Result<Pa
         (Normalize-Newlines $newDataDir) +
         $util.Substring($next)
 
-    Write-Host "Applying: redirect explicit WebView data directory" -ForegroundColor Cyan
+    Set-Content -LiteralPath $utilFile -Value $util -Encoding UTF8 -NoNewline
+    Write-Host "Applied portable WebView data path." -ForegroundColor Green
 }
 
-Set-Content -LiteralPath $utilFile -Value $util -Encoding UTF8 -NoNewline
-
-# -------------------------------------------------------------------
-# 2. Redirect Tauri/plugin data.
+# ===================================================================
+# B. Tauri/plugin directories
+# ===================================================================
 #
-# v1.5 deliberately DOES NOT use regex for lib.rs.
-# The user's logs showed the exact source is present, but regex matching still
-# produced false negatives. We now patch by locating the actual source lines.
-# -------------------------------------------------------------------
+# IMPORTANT:
+# The current Pake source ALREADY creates:
+#
+#   let mut context = tauri::generate_context!();
+#
+# and modifies that context for runtime app identity.
+#
+# Earlier builder versions wrongly tried to create a second context and
+# rewrite the Builder call. That was unnecessary and brittle.
+#
+# v2.0 simply adds appDirectoriesOverride to Pake's EXISTING context.
+# No tuple matching. No run_app parsing. No Builder-call replacement.
+# ===================================================================
 
-$libText = Normalize-Newlines (Get-Content -LiteralPath $libFile -Raw)
+$lib = Normalize-Newlines (Get-Content -LiteralPath $libFile -Raw)
 
-if ($libText.Contains("PAKE_TRUE_PORTABLE_V5")) {
-    Write-Host "Portable Tauri context patch already present." -ForegroundColor DarkGray
+if ($lib.Contains("PAKE_TRUE_PORTABLE_CONTEXT_V2")) {
+    Write-Host "Portable Tauri context override already present." -ForegroundColor DarkGray
 }
 else {
-    $lines = [System.Collections.Generic.List[string]]::new()
+    $anchor = "let mut context = tauri::generate_context!();"
+    $anchorIndex = $lib.IndexOf($anchor,[StringComparison]::Ordinal)
 
-    foreach ($line in ($libText -split "`n",-1)) {
-        [void]$lines.Add($line)
+    if ($anchorIndex -lt 0) {
+        Show-Context -Text $lib -Needle "pub fn run_app" -Label "existing Tauri context not found"
+        throw "Current Pake no longer creates a mutable Tauri context in the expected way. Re-inspection is required."
     }
 
-    # Find run_app first, so we only modify code inside that function.
-    $runAppIndex = -1
-    for ($i = 0; $i -lt $lines.Count; $i++) {
-        if ($lines[$i].Trim() -eq "pub fn run_app() {") {
-            $runAppIndex = $i
-            break
-        }
+    # Prove that this context is actually consumed by the app builder/run path.
+    # Ignore whitespace for this semantic check.
+    $compact = [regex]::Replace($lib,'\s+','')
+
+    if (
+        $compact.IndexOf(".build(context)",[StringComparison]::Ordinal) -lt 0 -and
+        $compact.IndexOf(".run(context)",[StringComparison]::Ordinal) -lt 0
+    ) {
+        Show-Context -Text $lib -Needle $anchor -Label "context exists but is not consumed"
+        throw "Pake creates a mutable context, but this script could not prove that the builder/run path consumes it."
     }
 
-    if ($runAppIndex -lt 0) {
-        Fail-With-Context `
-            -Text $libText `
-            -Needle "run_app" `
-            -Message "Could not find pub fn run_app()."
-    }
+    $insertAt = $anchorIndex + $anchor.Length
 
-    # Find the exact get_pake_config assignment by trimmed LINE content.
-    $configIndex = -1
-    for ($i = $runAppIndex; $i -lt $lines.Count; $i++) {
-        if ($lines[$i].Trim() -eq "let (pake_config, tauri_config) = get_pake_config();") {
-            $configIndex = $i
-            break
-        }
-    }
+    $override = @'
 
-    if ($configIndex -lt 0) {
-        Fail-With-Context `
-            -Text $libText `
-            -Needle "get_pake_config" `
-            -Message "Could not find the get_pake_config assignment inside run_app()."
-    }
+// PAKE_TRUE_PORTABLE_CONTEXT_V2
+// Tauri/plugin app directories follow this dedicated portable root.
+// Pake's explicit WebView profile is redirected separately in util.rs.
+#[cfg(target_os = "windows")]
+{
+    use tauri::utils::config::AppDirectoriesOverride;
+    context.config_mut().app.app_directories_override =
+        Some(AppDirectoriesOverride::Root("./Data/App".into()));
+}
+'@
 
-    $indent = $lines[$configIndex].Substring(
-        0,
-        $lines[$configIndex].Length - $lines[$configIndex].TrimStart().Length
-    )
+    $lib =
+        $lib.Substring(0,$insertAt) +
+        (Normalize-Newlines $override) +
+        $lib.Substring($insertAt)
 
-    $contextLines = @(
-        "",
-        "${indent}// PAKE_TRUE_PORTABLE_V5",
-        "${indent}// Redirect Tauri/plugin app directories for the portable build.",
-        "${indent}// Pake's explicit WebView data directory is handled separately in util.rs.",
-        "${indent}let mut portable_context = tauri::generate_context!();",
-        "",
-        "${indent}#[cfg(target_os = `"windows`")]",
-        "${indent}{",
-        "${indent}    use tauri::utils::config::AppDirectoriesOverride;",
-        "${indent}    portable_context.config_mut().app.app_directories_override =",
-        "${indent}        Some(AppDirectoriesOverride::Root(`"./Data/App`".into()));",
-        "${indent}}"
-    )
-
-    for ($offset = 0; $offset -lt $contextLines.Count; $offset++) {
-        $lines.Insert($configIndex + 1 + $offset,$contextLines[$offset])
-    }
-
-    Write-Host "Applying: create portable Tauri context" -ForegroundColor Cyan
-
-    # Find .build(tauri::generate_context!()) by TRIMMED line content.
-    # Current Pake has this as one line. If upstream later splits it over
-    # multiple lines, fail with a diagnostic instead of guessing.
-    $buildIndex = -1
-
-    for ($i = $configIndex + $contextLines.Count + 1; $i -lt $lines.Count; $i++) {
-        if ($lines[$i].Trim() -eq ".build(tauri::generate_context!())") {
-            $buildIndex = $i
-            break
-        }
-    }
-
-    if ($buildIndex -lt 0) {
-        $currentText = ($lines -join "`n")
-        Fail-With-Context `
-            -Text $currentText `
-            -Needle "generate_context!" `
-            -Message "Could not find the Tauri builder .build(tauri::generate_context!()) line."
-    }
-
-    $buildIndent = $lines[$buildIndex].Substring(
-        0,
-        $lines[$buildIndex].Length - $lines[$buildIndex].TrimStart().Length
-    )
-
-    $lines[$buildIndex] = "${buildIndent}.build(portable_context)"
-
-    Write-Host "Applying: build with portable Tauri context" -ForegroundColor Cyan
-
-    $libText = $lines -join "`n"
+    Set-Content -LiteralPath $libFile -Value $lib -Encoding UTF8 -NoNewline
+    Write-Host "Applied portable Tauri/plugin data path to Pake's existing context." -ForegroundColor Green
 }
 
-Set-Content -LiteralPath $libFile -Value $libText -Encoding UTF8 -NoNewline
-
-# -------------------------------------------------------------------
-# 3. Final self-check BEFORE allowing the workflow to continue.
-# -------------------------------------------------------------------
+# ===================================================================
+# C. Final self-check
+# ===================================================================
 
 $utilCheck = Get-Content -LiteralPath $utilFile -Raw
 $libCheck = Get-Content -LiteralPath $libFile -Raw
 
 foreach ($needle in @(
+    "PAKE_PORTABLE_WEBVIEW_V2",
     '.join("Data")',
     '.join("WebView")'
 )) {
     if ($utilCheck.IndexOf($needle,[StringComparison]::Ordinal) -lt 0) {
-        throw "Self-check failed after patching util.rs: missing $needle"
+        throw "Post-patch self-check failed in util.rs: missing $needle"
     }
 }
 
 foreach ($needle in @(
-    "PAKE_TRUE_PORTABLE_V5",
+    "PAKE_TRUE_PORTABLE_CONTEXT_V2",
     'AppDirectoriesOverride::Root("./Data/App".into())',
-    ".build(portable_context)"
+    "context.config_mut().app.app_directories_override"
 )) {
     if ($libCheck.IndexOf($needle,[StringComparison]::Ordinal) -lt 0) {
-        throw "Self-check failed after patching lib.rs: missing $needle"
+        throw "Post-patch self-check failed in lib.rs: missing $needle"
     }
 }
 
@@ -282,18 +231,18 @@ $revision = (git -C $SourceRoot rev-parse HEAD).Trim()
 
 [ordered]@{
     patch = "Pake Windows true-portable"
-    patch_version = "1.5"
+    patch_version = "2.0"
     upstream_revision = $revision
     applied_at = (Get-Date).ToString("o")
     tauri_app_root = "./Data/App"
     webview_root = "./Data/WebView/<productName>"
     downloads = "normal Windows Downloads directory"
-    matching = "line-based source editing; no regex for lib.rs"
+    source_strategy = "reuse Pake's existing mutable Tauri context; no Builder-call rewrite"
 } |
     ConvertTo-Json -Depth 6 |
     Set-Content -LiteralPath (Join-Path $SourceRoot ".pake-true-portable-patch.json") -Encoding UTF8
 
 Write-Host ""
-Write-Host "Pake true-portable source patch applied successfully." -ForegroundColor Green
+Write-Host "Pake true-portable source patch v2.0 applied successfully." -ForegroundColor Green
 Write-Host "  Tauri/plugin data: .\Data\App" -ForegroundColor Green
 Write-Host "  WebView data:      .\Data\WebView\<AppName>" -ForegroundColor Green
