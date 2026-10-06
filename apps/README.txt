@@ -96,3 +96,13 @@ messages for automation.
 `targets` now defaults to an empty string in saved app definitions. Empty means
 Pake auto-detects the native Windows architecture. Set it to `x64` or `arm64`
 only when you specifically want to force that target.
+
+
+POWERSHELL WRAPPER NOTE
+-----------------------
+The saved JSON field remains:
+
+  "debug": false
+
+Internally, the PowerShell wrapper parameter is named `PakeDebug` because
+`Debug` is a reserved PowerShell Common Parameter name for advanced scripts.

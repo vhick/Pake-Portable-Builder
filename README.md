@@ -106,3 +106,23 @@ If a build fails, the diagnostics artifact should now contain:
 - `pake-build-config.json` when config generation was reached
 - `pake-help.txt` when CLI discovery was reached
 - `pake-stdout.json` and `pake-stderr.log` when Pake itself was launched
+
+
+## v1.4 PowerShell parameter fix
+
+`Build-One-PakeApp.ps1` is an advanced PowerShell script because it uses
+`[Parameter()]` attributes. PowerShell automatically supplies Common Parameters
+to advanced scripts, including `-Debug`.
+
+The Windows-features update accidentally declared its own `$Debug` parameter,
+which causes PowerShell to reject the script before any of its code runs.
+
+The wrapper parameter is now named:
+
+`-PakeDebug`
+
+while the generated Pake JSON config still correctly uses:
+
+`"debug": true|false`
+
+No Pake feature was removed.
