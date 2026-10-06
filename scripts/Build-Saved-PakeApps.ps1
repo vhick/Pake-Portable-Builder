@@ -48,12 +48,37 @@ foreach ($file in $configs) {
         -Icon ([string](Get-Value $cfg "icon" "")) `
         -Width ([int](Get-Value $cfg "width" 1200)) `
         -Height ([int](Get-Value $cfg "height" 780)) `
+        -MinWidth ([int](Get-Value $cfg "minWidth" 0)) `
+        -MinHeight ([int](Get-Value $cfg "minHeight" 0)) `
+        -Zoom ([int](Get-Value $cfg "zoom" 100)) `
         -ShowSystemTray ([bool](Get-Value $cfg "showSystemTray" $true)) `
         -HideOnClose ([bool](Get-Value $cfg "hideOnClose" $true)) `
         -StartToTray ([bool](Get-Value $cfg "startToTray" $false)) `
         -Incognito ([bool](Get-Value $cfg "incognito" $false)) `
         -EnableFind ([bool](Get-Value $cfg "enableFind" $true)) `
-        -DarkMode ([bool](Get-Value $cfg "darkMode" $false))
+        -DarkMode ([bool](Get-Value $cfg "darkMode" $false)) `
+        -HideWindowDecorations ([bool](Get-Value $cfg "hideWindowDecorations" $false)) `
+        -Fullscreen ([bool](Get-Value $cfg "fullscreen" $false)) `
+        -Maximize ([bool](Get-Value $cfg "maximize" $false)) `
+        -ActivationShortcut ([string](Get-Value $cfg "activationShortcut" "")) `
+        -AlwaysOnTop ([bool](Get-Value $cfg "alwaysOnTop" $false)) `
+        -ForceInternalNavigation ([bool](Get-Value $cfg "forceInternalNavigation" $false)) `
+        -MultiWindow ([bool](Get-Value $cfg "multiWindow" $false)) `
+        -NewWindow ([bool](Get-Value $cfg "newWindow" $false)) `
+        -Title ([string](Get-Value $cfg "title" "")) `
+        -DisabledWebShortcuts ([bool](Get-Value $cfg "disabledWebShortcuts" $false)) `
+        -InternalUrlRegex ([string](Get-Value $cfg "internalUrlRegex" "")) `
+        -SafeDomain ([string](Get-Value $cfg "safeDomain" "")) `
+        -UserAgent ([string](Get-Value $cfg "userAgent" "")) `
+        -SystemTrayIcon ([string](Get-Value $cfg "systemTrayIcon" "")) `
+        -Wasm ([bool](Get-Value $cfg "wasm" $false)) `
+        -EnableDragDrop ([bool](Get-Value $cfg "enableDragDrop" $false)) `
+        -MultiInstance ([bool](Get-Value $cfg "multiInstance" $false)) `
+        -ProxyUrl ([string](Get-Value $cfg "proxyUrl" "")) `
+        -Debug ([bool](Get-Value $cfg "debug" $false)) `
+        -IgnoreCertificateErrors ([bool](Get-Value $cfg "ignoreCertificateErrors" $false)) `
+        -Targets ([string](Get-Value $cfg "targets" "x64")) `
+        -AppVersion ([string](Get-Value $cfg "appVersion" ""))
 
     $built++
 }
